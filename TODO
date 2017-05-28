@@ -1,0 +1,6 @@
+
+globl stickr:
+
+1. get at least 4 google street view images for location(test w test images)
+2. get image capture with image extraction/.png (tracking.js?)
+3. create image avatar drag n droppable 

@@ -315,6 +315,120 @@ var Observable = (function () {
         observable.operator = operator;
         return observable;
     };
+    /**
+     * Invokes an execution of an Observable and registers Observer handlers for notifications it will emit.
+     *
+     * <span class="informal">Use it when you have all these Observables, but still nothing is happening.</span>
+     *
+     * `subscribe` is not a regular operator, but a method that calls Observables internal `subscribe` function. It
+     * might be for example a function that you passed to a {@link create} static factory, but most of the time it is
+     * a library implementation, which defines what and when will be emitted by an Observable. This means that calling
+     * `subscribe` is actually the moment when Observable starts its work, not when it is created, as it is often
+     * thought.
+     *
+     * Apart from starting the execution of an Observable, this method allows you to listen for values
+     * that an Observable emits, as well as for when it completes or errors. You can achieve this in two
+     * following ways.
+     *
+     * The first way is creating an object that implements {@link Observer} interface. It should have methods
+     * defined by that interface, but note that it should be just a regular JavaScript object, which you can create
+     * yourself in any way you want (ES6 class, classic function constructor, object literal etc.). In particular do
+     * not attempt to use any RxJS implementation details to create Observers - you don't need them. Remember also
+     * that your object does not have to implement all methods. If you find yourself creating a method that doesn't
+     * do anything, you can simply omit it. Note however, that if `error` method is not provided, all errors will
+     * be left uncaught.
+     *
+     * The second way is to give up on Observer object altogether and simply provide callback functions in place of its methods.
+     * This means you can provide three functions as arguments to `subscribe`, where first function is equivalent
+     * of a `next` method, second of an `error` method and third of a `complete` method. Just as in case of Observer,
+     * if you do not need to listen for something, you can omit a function, preferably by passing `undefined` or `null`,
+     * since `subscribe` recognizes these functions by where they were placed in function call. When it comes
+     * to `error` function, just as before, if not provided, errors emitted by an Observable will be thrown.
+     *
+     * Whatever style of calling `subscribe` you use, in both cases it returns a Subscription object.
+     * This object allows you to call `unsubscribe` on it, which in turn will stop work that an Observable does and will clean
+     * up all resources that an Observable used. Note that cancelling a subscription will not call `complete` callback
+     * provided to `subscribe` function, which is reserved for a regular completion signal that comes from an Observable.
+     *
+     * Remember that callbacks provided to `subscribe` are not guaranteed to be called asynchronously.
+     * It is an Observable itself that decides when these functions will be called. For example {@link of}
+     * by default emits all its values synchronously. Always check documentation for how given Observable
+     * will behave when subscribed and if its default behavior can be modified with a {@link Scheduler}.
+     *
+     * @example <caption>Subscribe with an Observer</caption>
+     * const sumObserver = {
+     *   sum: 0,
+     *   next(value) {
+     *     console.log('Adding: ' + value);
+     *     this.sum = this.sum + value;
+     *   },
+     *   error() { // We actually could just remote this method,
+     *   },        // since we do not really care about errors right now.
+     *   complete() {
+     *     console.log('Sum equals: ' + this.sum);
+     *   }
+     * };
+     *
+     * Rx.Observable.of(1, 2, 3) // Synchronously emits 1, 2, 3 and then completes.
+     * .subscribe(sumObserver);
+     *
+     * // Logs:
+     * // "Adding: 1"
+     * // "Adding: 2"
+     * // "Adding: 3"
+     * // "Sum equals: 6"
+     *
+     *
+     * @example <caption>Subscribe with functions</caption>
+     * let sum = 0;
+     *
+     * Rx.Observable.of(1, 2, 3)
+     * .subscribe(
+     *   function(value) {
+     *     console.log('Adding: ' + value);
+     *     sum = sum + value;
+     *   },
+     *   undefined,
+     *   function() {
+     *     console.log('Sum equals: ' + sum);
+     *   }
+     * );
+     *
+     * // Logs:
+     * // "Adding: 1"
+     * // "Adding: 2"
+     * // "Adding: 3"
+     * // "Sum equals: 6"
+     *
+     *
+     * @example <caption>Cancel a subscription</caption>
+     * const subscription = Rx.Observable.interval(1000).subscribe(
+     *   num => console.log(num),
+     *   undefined,
+     *   () => console.log('completed!') // Will not be called, even
+     * );                                // when cancelling subscription
+     *
+     *
+     * setTimeout(() => {
+     *   subscription.unsubscribe();
+     *   console.log('unsubscribed!');
+     * }, 2500);
+     *
+     * // Logs:
+     * // 0 after 1s
+     * // 1 after 2s
+     * // "unsubscribed!" after 2,5s
+     *
+     *
+     * @param {Observer|Function} observerOrNext (optional) Either an observer with methods to be called,
+     *  or the first of three possible handlers, which is the handler for each value emitted from the subscribed
+     *  Observable.
+     * @param {Function} error (optional) A handler for a terminal event resulting from an error. If no error handler is provided,
+     *  the error will be thrown as unhandled.
+     * @param {Function} complete (optional) A handler for a terminal event resulting from successful completion.
+     * @return {ISubscription} a subscription reference to the registered handlers
+     * @method subscribe
+     */
     Observable.prototype.subscribe = function (observerOrNext, error, complete) {
         var operator = this.operator;
         var sink = toSubscriber_1.toSubscriber(observerOrNext, error, complete);
@@ -322,7 +436,7 @@ var Observable = (function () {
             operator.call(sink, this.source);
         }
         else {
-            sink.add(this._trySubscribe(sink));
+            sink.add(this.source ? this._subscribe(sink) : this._trySubscribe(sink));
         }
         if (sink.syncErrorThrowable) {
             sink.syncErrorThrowable = false;
@@ -3442,6 +3556,7 @@ var ErrorObservable = (function (_super) {
     ErrorObservable.prototype._subscribe = function (subscriber) {
         var error = this.error;
         var scheduler = this.scheduler;
+        subscriber.syncErrorThrowable = true;
         if (scheduler) {
             return scheduler.schedule(ErrorObservable.dispatch, 0, {
                 error: error, subscriber: subscriber
@@ -4425,7 +4540,7 @@ var NeverObservable = (function (_super) {
      *
      * This static operator is useful for creating a simple Observable that emits
      * neither values nor errors nor the completion notification. It can be used
-     * for testing purposes or for composing with other Observables. Please not
+     * for testing purposes or for composing with other Observables. Please note
      * that by never emitting a complete notification, this Observable keeps the
      * subscription from being disposed automatically. Subscriptions need to be
      * manually disposed.
@@ -5415,8 +5530,10 @@ var AjaxSubscriber = (function (_super) {
                 return null;
             }
             // timeout, responseType and withCredentials can be set once the XHR is open
-            xhr.timeout = request.timeout;
-            xhr.responseType = request.responseType;
+            if (async) {
+                xhr.timeout = request.timeout;
+                xhr.responseType = request.responseType;
+            }
             if ('withCredentials' in xhr) {
                 xhr.withCredentials = !!request.withCredentials;
             }
@@ -6045,7 +6162,13 @@ var AuditSubscriber = (function (_super) {
                 this.destination.error(errorObject_1.errorObject.e);
             }
             else {
-                this.add(this.throttled = subscribeToResult_1.subscribeToResult(this, duration));
+                var innerSubscription = subscribeToResult_1.subscribeToResult(this, duration);
+                if (innerSubscription.closed) {
+                    this.clearThrottle();
+                }
+                else {
+                    this.add(this.throttled = innerSubscription);
+                }
             }
         }
     };
@@ -7476,9 +7599,6 @@ var mergeMap_1 = require('./mergeMap');
  * - `innerValue`: the value that came from the projected Observable
  * - `outerIndex`: the "index" of the value that came from the source
  * - `innerIndex`: the "index" of the value from the projected Observable
- * @return {Observable} An observable of values merged from the projected
- * Observables as they were subscribed to, one at a time. Optionally, these
- * values may have been projected from a passed `projectResult` argument.
  * @return {Observable} An Observable that emits the result of applying the
  * projection function (and the optional `resultSelector`) to each item emitted
  * by the source Observable and taking values from each projected inner
@@ -8729,7 +8849,7 @@ var Subscriber_1 = require('../Subscriber');
  * Observer will never happen. `do` therefore simply spies on existing
  * execution, it does not trigger an execution to happen like `subscribe` does.
  *
- * @example <caption>Map every every click to the clientX position of that click, while also logging the click event</caption>
+ * @example <caption>Map every click to the clientX position of that click, while also logging the click event</caption>
  * var clicks = Rx.Observable.fromEvent(document, 'click');
  * var positions = clicks
  *   .do(ev => console.log(ev))
@@ -9015,7 +9135,7 @@ var subscribeToResult_1 = require('../util/subscribeToResult');
  *
  * @example <caption>Run a finite timer for each click, only if there is no currently active timer</caption>
  * var clicks = Rx.Observable.fromEvent(document, 'click');
- * var higherOrder = clicks.map((ev) => Rx.Observable.interval(1000));
+ * var higherOrder = clicks.map((ev) => Rx.Observable.interval(1000).take(5));
  * var result = higherOrder.exhaust();
  * result.subscribe(x => console.log(x));
  *
@@ -9107,7 +9227,7 @@ var subscribeToResult_1 = require('../util/subscribeToResult');
  *
  * @example <caption>Run a finite timer for each click, only if there is no currently active timer</caption>
  * var clicks = Rx.Observable.fromEvent(document, 'click');
- * var result = clicks.exhaustMap((ev) => Rx.Observable.interval(1000));
+ * var result = clicks.exhaustMap((ev) => Rx.Observable.interval(1000).take(5));
  * result.subscribe(x => console.log(x));
  *
  * @see {@link concatMap}
@@ -9860,7 +9980,7 @@ var FastMap_1 = require('../util/FastMap');
  *                    {id: 3, name: 'qfs1'},
  *                    {id: 2, name: 'qsgqsfg2'}
  *                   )
- *     .groupBy(p => p.id, p => p.anme)
+ *     .groupBy(p => p.id, p => p.name)
  *     .flatMap( (group$) => group$.reduce((acc, cur) => [...acc, cur], ["" + group$.key]))
  *     .map(arr => ({'id': parseInt(arr[0]), 'values': arr.slice(1)}))
  *     .subscribe(p => console.log(p));
@@ -10008,27 +10128,20 @@ var GroupBySubscriber = (function (_super) {
 var GroupDurationSubscriber = (function (_super) {
     __extends(GroupDurationSubscriber, _super);
     function GroupDurationSubscriber(key, group, parent) {
-        _super.call(this);
+        _super.call(this, group);
         this.key = key;
         this.group = group;
         this.parent = parent;
     }
     GroupDurationSubscriber.prototype._next = function (value) {
-        this._complete();
+        this.complete();
     };
-    GroupDurationSubscriber.prototype._error = function (err) {
-        var group = this.group;
-        if (!group.closed) {
-            group.error(err);
+    GroupDurationSubscriber.prototype._unsubscribe = function () {
+        var _a = this, parent = _a.parent, key = _a.key;
+        this.key = this.parent = null;
+        if (parent) {
+            parent.removeGroup(key);
         }
-        this.parent.removeGroup(this.key);
-    };
-    GroupDurationSubscriber.prototype._complete = function () {
-        var group = this.group;
-        if (!group.closed) {
-            group.complete();
-        }
-        this.parent.removeGroup(this.key);
     };
     return GroupDurationSubscriber;
 }(Subscriber_1.Subscriber));
@@ -10428,7 +10541,7 @@ var Subscriber_1 = require('../Subscriber');
  * Observable emits a value. In other words, ignores the actual source value,
  * and simply uses the emission moment to know when to emit the given `value`.
  *
- * @example <caption>Map every every click to the string 'Hi'</caption>
+ * @example <caption>Map every click to the string 'Hi'</caption>
  * var clicks = Rx.Observable.fromEvent(document, 'click');
  * var greetings = clicks.mapTo('Hi');
  * greetings.subscribe(x => console.log(x));
@@ -11819,7 +11932,7 @@ var map_1 = require('./map');
  * Observable. If a property can't be resolved, it will return `undefined` for
  * that value.
  *
- * @example <caption>Map every every click to the tagName of the clicked target element</caption>
+ * @example <caption>Map every click to the tagName of the clicked target element</caption>
  * var clicks = Rx.Observable.fromEvent(document, 'click');
  * var tagNames = clicks.pluck('target', 'tagName');
  * tagNames.subscribe(x => console.log(x));
@@ -14419,7 +14532,7 @@ var throttle_1 = require('./throttle');
  * emitting the last value, measured in milliseconds or the time unit determined
  * internally by the optional `scheduler`.
  * @param {Scheduler} [scheduler=async] The {@link IScheduler} to use for
- * managing the timers that handle the sampling.
+ * managing the timers that handle the throttling.
  * @return {Observable<T>} An Observable that performs the throttle operation to
  * limit the rate of emissions from the source.
  * @method throttleTime
@@ -14867,7 +14980,7 @@ var root_1 = require('../util/root');
  * source.then((value) => console.log('Value: %s', value));
  * // => Value: 42
  *
- * @param PromiseCtor promise The constructor of the promise. If not provided,
+ * @param {PromiseConstructor} [PromiseCtor] The constructor of the promise. If not provided,
  * it will look for a constructor first in Rx.config.Promise then fall back to
  * the native Promise constructor if available.
  * @return {Promise<T>} An ES2015 compatible promise with the last value from
@@ -16395,7 +16508,6 @@ var AsyncAction = (function (_super) {
         var actions = scheduler.actions;
         var index = actions.indexOf(this);
         this.work = null;
-        this.delay = null;
         this.state = null;
         this.pending = false;
         this.scheduler = null;
@@ -16405,6 +16517,7 @@ var AsyncAction = (function (_super) {
         if (id != null) {
             this.id = this.recycleAsyncId(scheduler, id, null);
         }
+        this.delay = null;
     };
     return AsyncAction;
 }(Action_1.Action));
@@ -62806,6 +62919,33 @@ function loadTextureAsync(url, mapping) {
     });
 }
 
+function b64EncodeUnicode(str) {
+    // first we use encodeURIComponent to get percent-encoded UTF-8,
+    // then we convert the percent encodings into raw bytes which
+    // can be fed into btoa.
+    return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, function toSolidBytes(match, p1) {
+        return String.fromCharCode('0x' + p1);
+    }));
+}
+
+function fetchBlob(uri, callback) {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', uri, true);
+    xhr.responseType = 'arraybuffer';
+
+    xhr.onload = function (e) {
+        if (this.status == 200) {
+            var blob = this.response;
+            if (callback) {
+                callback(blob);
+            }
+        }
+    };
+    xhr.send();
+};
+
+var jpgData = new Uint8Array([255, 216, 255, 224, 0, 16, 74, 70, 73, 70, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 255, 254, 0, 62, 67, 82, 69, 65, 84, 79, 82, 58, 32, 103, 100, 45, 106, 112, 101, 103, 32, 118, 49, 46, 48, 32, 40, 117, 115, 105, 110, 103, 32, 73, 74, 71, 32, 74, 80, 69, 71, 32, 118, 54, 50, 41, 44, 32, 100, 101, 102, 97, 117, 108, 116, 32, 113, 117, 97, 108, 105, 116, 121, 10, 255, 219, 0, 67, 0, 8, 6, 6, 7, 6, 5, 8, 7, 7, 7, 9, 9, 8, 10, 12, 20, 13, 12, 11, 11, 12, 25, 18, 19, 15, 20, 29, 26, 31, 30, 29, 26, 28, 28, 32, 36, 46, 39, 32, 34, 44, 35, 28, 28, 40, 55, 41, 44, 48, 49, 52, 52, 52, 31, 39, 57, 61, 56, 50, 60, 46, 51, 52, 50, 255, 219, 0, 67, 1, 9, 9, 9, 12, 11, 12, 24, 13, 13, 24, 50, 33, 28, 33, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 255, 192, 0, 17, 8, 0, 24, 0, 24, 3, 1, 34, 0, 2, 17, 1, 3, 17, 1, 255, 196, 0, 31, 0, 0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 255, 196, 0, 181, 16, 0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 125, 1, 2, 3, 0, 4, 17, 5, 18, 33, 49, 65, 6, 19, 81, 97, 7, 34, 113, 20, 50, 129, 145, 161, 8, 35, 66, 177, 193, 21, 82, 209, 240, 36, 51, 98, 114, 130, 9, 10, 22, 23, 24, 25, 26, 37, 38, 39, 40, 41, 42, 52, 53, 54, 55, 56, 57, 58, 67, 68, 69, 70, 71, 72, 73, 74, 83, 84, 85, 86, 87, 88, 89, 90, 99, 100, 101, 102, 103, 104, 105, 106, 115, 116, 117, 118, 119, 120, 121, 122, 131, 132, 133, 134, 135, 136, 137, 138, 146, 147, 148, 149, 150, 151, 152, 153, 154, 162, 163, 164, 165, 166, 167, 168, 169, 170, 178, 179, 180, 181, 182, 183, 184, 185, 186, 194, 195, 196, 197, 198, 199, 200, 201, 202, 210, 211, 212, 213, 214, 215, 216, 217, 218, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 255, 196, 0, 31, 1, 0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 255, 196, 0, 181, 17, 0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 119, 0, 1, 2, 3, 17, 4, 5, 33, 49, 6, 18, 65, 81, 7, 97, 113, 19, 34, 50, 129, 8, 20, 66, 145, 161, 177, 193, 9, 35, 51, 82, 240, 21, 98, 114, 209, 10, 22, 36, 52, 225, 37, 241, 23, 24, 25, 26, 38, 39, 40, 41, 42, 53, 54, 55, 56, 57, 58, 67, 68, 69, 70, 71, 72, 73, 74, 83, 84, 85, 86, 87, 88, 89, 90, 99, 100, 101, 102, 103, 104, 105, 106, 115, 116, 117, 118, 119, 120, 121, 122, 130, 131, 132, 133, 134, 135, 136, 137, 138, 146, 147, 148, 149, 150, 151, 152, 153, 154, 162, 163, 164, 165, 166, 167, 168, 169, 170, 178, 179, 180, 181, 182, 183, 184, 185, 186, 194, 195, 196, 197, 198, 199, 200, 201, 202, 210, 211, 212, 213, 214, 215, 216, 217, 218, 226, 227, 228, 229, 230, 231, 232, 233, 234, 242, 243, 244, 245, 246, 247, 248, 249, 250, 255, 218, 0, 12, 3, 1, 0, 2, 17, 3, 17, 0, 63, 0, 225, 109, 238, 89, 177, 194, 175, 3, 160, 56, 198, 63, 90, 232, 23, 193, 58, 181, 198, 129, 246, 255, 0, 48, 91, 73, 52, 196, 37, 147, 225, 119, 192, 49, 243, 111, 45, 158, 73, 29, 187, 142, 213, 204, 197, 117, 246, 11, 104, 101, 154, 88, 124, 180, 145, 72, 81, 247, 136, 207, 183, 30, 181, 239, 190, 36, 188, 211, 99, 68, 185, 242, 148, 164, 113, 121, 145, 180, 127, 119, 102, 51, 159, 166, 43, 139, 15, 77, 89, 201, 149, 177, 226, 44, 230, 81, 37, 188, 214, 234, 251, 91, 107, 28, 228, 238, 29, 206, 79, 255, 0, 90, 138, 154, 242, 120, 230, 19, 72, 176, 198, 190, 103, 207, 251, 179, 157, 217, 25, 200, 205, 21, 196, 147, 111, 64, 122, 144, 216, 248, 87, 251, 98, 55, 143, 85, 185, 158, 210, 220, 169, 116, 40, 60, 204, 55, 24, 227, 191, 83, 233, 94, 129, 117, 168, 19, 225, 187, 125, 29, 165, 23, 119, 73, 103, 37, 164, 183, 112, 40, 10, 160, 0, 17, 182, 158, 229, 120, 227, 184, 162, 138, 214, 150, 42, 106, 45, 89, 21, 73, 123, 73, 53, 35, 137, 26, 4, 176, 69, 228, 137, 51, 110, 16, 236, 221, 130, 216, 3, 140, 154, 40, 162, 176, 246, 175, 153, 232, 67, 220, 255, 217]);
+
 var lat = '47.610553047';
 var long = '-122.3034100122';
 
@@ -62832,7 +62972,7 @@ var init = function init() {
 
 
     planeGeometry = new THREE.PlaneGeometry(20, 20, 20);
-    // planeMaterial = new THREE.MeshBasicMaterial( {map: planeTexture} );
+    planeMaterial = new THREE.MeshBasicMaterial({ map: planeTexture });
     plane = new THREE.Mesh(planeGeometry, planeMaterial);
     plane.material.side = THREE.DoubleSide;
     scene.add(plane);
@@ -62864,42 +63004,30 @@ var render = function render() {
 //  init();
 //  render();
 
-$.get("https://maps.googleapis.com/maps/api/streetview?size=600x300&location=" + lat + "," + long + "&heading=151.78&pitch=-0.76&key=" + _keys.myTokens.googleStreetViewKey, function (data) {
+fetchBlob("https://maps.googleapis.com/maps/api/streetview?size=600x300&location=" + lat + "," + long + "&heading=151.78&pitch=-0.76&key=" + _keys.myTokens.googleStreetViewKey, function (data) {
 
-    console.log('dataaaa: ', data.length);
-}).done(function (success) {
-    console.log('success', success.length);
+    planeImage = new Image();
 
-    //  loadTextureAsync (success, planeTexture);
-    // planeTexture = new THREE.Texture(success);
+    var stringData = String.fromCharCode.apply(null, new Uint8Array(data));
+    console.log("DATA: ", data);
+    var encodedData = window.btoa(stringData);
+    var dataURI = "data:image/jpeg;base64," + encodedData;
 
-    planeMaterial = new THREE.MeshBasicMaterial({
-        map: THREE.ImageUtils.loadTexture(success)
-    });
-    planeMaterial.map.needsUpdate = true;
+    planeImage = new Image();
+    planeTexture = new THREE.Texture();
+    planeImage.onload = function () {
+        planeTexture.image = planeImage;
+        planeTexture.needsUpdate = true;
+    };
+
+    planeImage.src = dataURI;
 
     setTimeout(function () {
         init();
         render();
     }, 2000);
-}).fail(function (err) {
-    console.log(err);
 });
 
-// planeImage =new Image();
-// planeImage.onload = (()=> {    } )
-// planeImage.src = "https://maps.googleapis.com/maps/api/streetview?size=600x300&location=" + lat + "," + long + "&heading=151.78&pitch=-0.76&key=" + myTokens.googleStreetViewKey;
-
-// setTimeout(()=>{
-//     planeTexture = new THREE.ImageUtils.loadTexture(planeImage);
-// }, 1500);
-
-// setTimeout(()=>{ 
-//       init();
-//     render();
-//   }, 3000);
-
-//helpers
 window.addEventListener("resize", function () {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
